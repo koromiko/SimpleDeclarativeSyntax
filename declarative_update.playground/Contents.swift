@@ -80,31 +80,39 @@ extension UILabel: StateUpdatable {
 }
 
 class StackHost: UIStackView {
-    private var viewStore: [Int: StateUpdatable] = [:]
     private var current: [Int] = []
+    private var viewStore: [Int: StateUpdatable] = [:]
 
     func update(_ updated: [ViewRepresentivie]) {
         let updatedFootprint = updated.map({$0.hashValue})
-        let diffs = updatedFootprint.difference(from: current)
+        let diffs = updatedFootprint.difference(from: current).map { $0 }
+        var skip = false
 
-        for diff in diffs {
+        for (di, diff) in diffs.enumerated() {
+            if skip { // Skip the case that is handled by edit
+                skip = false
+                continue
+            }
+            // Replacing case
+            if di+1 < diffs.count {
+                // insert after remove, at the same index
+                if case .insert(let insertIndex, _, _) = diffs[di+1], case .remove(let removeIndex, let element, _) = diff, insertIndex == removeIndex {
+                    if let hostedView = viewStore[element] {
+                        hostedView.setup(state: updated[insertIndex].state)
+                        skip = true
+                        continue
+                    }
+                }
+            }
+
             switch diff {
-            case .insert(let offset, let element, _):
-                if let hostedView = viewStore[element.hashValue] {
-                    hostedView.setup(state: updated[offset].state)
-                    insertArrangedSubview(hostedView, at: offset)
-                } else {
-                    let hostedView = updated[offset].viewType.init()
-                    hostedView.setup(state: updated[offset].state)
-                    viewStore[element.hashValue] = hostedView
-                    insertArrangedSubview(hostedView, at: offset)
-                }
-
-            case .remove(_ , let element, _):
-                if let view = viewStore[element.hashValue] {
-                    view.removeFromSuperview()
-                    viewStore.removeValue(forKey: element.hashValue)
-                }
+            case .insert(let offset, _, _):
+                let hostedView = updated[offset].viewType.init()
+                hostedView.setup(state: updated[offset].state)
+                insertArrangedSubview(hostedView, at: offset)
+                viewStore[updatedFootprint[offset]] = hostedView
+            case .remove(let offset , _, _):
+                arrangedSubviews[offset].removeFromSuperview()
             }
         }
         current = updatedFootprint
