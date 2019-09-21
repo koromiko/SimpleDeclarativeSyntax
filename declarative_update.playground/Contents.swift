@@ -34,28 +34,40 @@ struct LabelState: State, Hashable {
 protocol StateUpdatable: UIView {
     func setup(state: State)
 }
+// Type-erasured container for view-prepresentivie struct, like Label, Button, etc
+enum ViewRepresentivie: Hashable {
+    case label(StateStore<LabelState>)
 
-struct Label: Hashable {
+    var viewType: StateUpdatable.Type {
+        switch self {
+        case .label:
+            return UILabel.self
+        }
+    }
 
-
-    var state: LabelState
-    weak var stateStore: StateStore<LabelState>?
-    weak var hostingView: UILabel?
-
-    init(_ stateStore: StateStore<LabelState>) {
-        self.state = stateStore.value
-        self.stateStore = stateStore
+    var state: State {
+        switch self {
+        case .label(let store):
+            return store.value
+        }
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(state)
+        switch self {
+        case .label(let store):
+            hasher.combine(store.value)
+        }
     }
 
-    static func == (lhs: Label, rhs: Label) -> Bool {
-        return lhs.state == rhs.state
+    static func == (lhs: ViewRepresentivie, rhs: ViewRepresentivie) -> Bool {
+        switch (lhs, rhs) {
+        case (.label(let storeLhs), .label(let storeRhs)):
+            return storeLhs.value == storeRhs.value
+        }
     }
 }
 
+// Make UILabel to support configuration by State
 extension UILabel: StateUpdatable {
     func setup(state: State) {
         guard let state = state as? LabelState else {
@@ -69,19 +81,21 @@ extension UILabel: StateUpdatable {
 
 class StackHost: UIStackView {
     private var viewStore: [Int: StateUpdatable] = [:]
-    private var current: [Label] = []
+    private var current: [Int] = []
 
-    func update(_ updated: [Label]) {
-        let diffs = updated.difference(from: current)
+    func update(_ updated: [ViewRepresentivie]) {
+        let updatedFootprint = updated.map({$0.hashValue})
+        let diffs = updatedFootprint.difference(from: current)
+
         for diff in diffs {
             switch diff {
             case .insert(let offset, let element, _):
                 if let hostedView = viewStore[element.hashValue] {
-                    hostedView.setup(state: element.state)
+                    hostedView.setup(state: updated[offset].state)
                     insertArrangedSubview(hostedView, at: offset)
                 } else {
-                    let hostedView = UILabel.createLabel()
-                    hostedView.setup(state: element.state)
+                    let hostedView = updated[offset].viewType.init()
+                    hostedView.setup(state: updated[offset].state)
                     viewStore[element.hashValue] = hostedView
                     insertArrangedSubview(hostedView, at: offset)
                 }
@@ -93,11 +107,9 @@ class StackHost: UIStackView {
                 }
             }
         }
-        current = updated
+        current = updatedFootprint
     }
 }
-
-
 
 class MyViewController : UIViewController, Renderer {
     lazy var stackView: StackHost = {
@@ -124,12 +136,13 @@ class MyViewController : UIViewController, Renderer {
 
     func render() {
         stackView.update([
-            Label(state1),
-            Label(state3),
-            Label(state2),
+            .label(state1),
+            .label(state3),
+            .label(state2),
         ])
     }
 
+    // Mark: setup buttons and actions for demo
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -146,7 +159,7 @@ class MyViewController : UIViewController, Renderer {
         makeBtn(title: "Change value 2", action: #selector(changeValue2))
         makeBtn(title: "Show hidden label", action: #selector(showHIddenLabel))
         render()
-    } 
+    }
 
     @objc func changeValue1() {
         state1.value.text = "Label 1 updated"
@@ -158,7 +171,8 @@ class MyViewController : UIViewController, Renderer {
         state3.value.isHidden = !state3.value.isHidden
     }
 
-    func makeBtn(title: String, action: Selector) {
+    // MARK: Helper
+    private func makeBtn(title: String, action: Selector) {
         let btn = UIButton(type: .custom)
         btn.translatesAutoresizingMaskIntoConstraints = false
         if let lastBtn = view.subviews.compactMap({ $0 as? UIButton }).last {
